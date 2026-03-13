@@ -6,7 +6,7 @@ export async function POST(req: NextRequest) {
 
     const MOODLE_URL = process.env.NEXT_PUBLIC_MOODLE_URL || "http://localhost";
 
-    console.log("Login attempt:", { MOODLE_URL, username });
+    //console.log("Login attempt:", { MOODLE_URL, username });
 
     // Use POST with form encoding to handle special characters safely
     const loginRes = await fetch(`${MOODLE_URL}/login/token.php`, {
@@ -20,7 +20,7 @@ export async function POST(req: NextRequest) {
     });
 
     const loginData = await loginRes.json();
-    console.log("Moodle login response:", loginData);
+    //console.log("Moodle login response:", loginData);
 
     if (loginData.error) {
       return NextResponse.json(
@@ -34,7 +34,7 @@ export async function POST(req: NextRequest) {
       `${MOODLE_URL}/webservice/rest/server.php?wstoken=${loginData.token}&wsfunction=core_webservice_get_site_info&moodlewsrestformat=json`
     );
     const infoData = await infoRes.json();
-    console.log("User info:", infoData);
+    //console.log("User info:", infoData);
 
     return NextResponse.json({
       token:     loginData.token,
@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
     });
 
   } catch (error: any) {
-    console.error("Login error:", error);
+    //console.error("Login error:", error);
     return NextResponse.json(
       { error: error.message || "Login failed" },
       { status: 500 }
