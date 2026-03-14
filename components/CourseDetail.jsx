@@ -1,0 +1,767 @@
+"use client";
+import { useState, useEffect, useRef } from "react";
+
+/* ═══════════════════════════════════════════════════════════
+   COURSE DETAIL — Tabbed page with Quizzes (+ more coming)
+   Props: course, user, lang, isRtl, tx, onBack, moodle
+═══════════════════════════════════════════════════════════ */
+
+const C = {
+  blue:   "#1d6fd8",
+  dark:   "#0f4fa3",
+  light:  "#e8f1fd",
+  bg:     "#f0f4f8",
+};
+
+function Spinner({ size=32, color=C.blue }) {
+  return (
+    <div style={{ display:"flex",justifyContent:"center",padding:40 }}>
+      <div style={{ width:size,height:size,border:`3px solid ${color}22`,borderTop:`3px solid ${color}`,borderRadius:"50%",animation:"spin 0.8s linear infinite" }}/>
+    </div>
+  );
+}
+
+function Card({ children, style={} }) {
+  return (
+    <div style={{ background:"#fff",border:"1px solid #e2eaf5",borderRadius:16,boxShadow:"0 2px 12px rgba(29,111,216,0.06)",...style }}>
+      {children}
+    </div>
+  );
+}
+
+function Badge({ label, color, bg, border }) {
+  return (
+    <span style={{ background:bg,color,border:`1px solid ${border}`,fontSize:11,fontWeight:700,padding:"3px 10px",borderRadius:20,whiteSpace:"nowrap" }}>
+      {label}
+    </span>
+  );
+}
+
+// ── Tab definitions ───────────────────────────────────────
+const TABS = [
+  { id:"overview",    en:"Overview",    ar:"نظرة عامة",   icon:"📋" },
+  { id:"quizzes",     en:"Quizzes",     ar:"الاختبارات",  icon:"📝" },
+  { id:"exams",       en:"Exams",       ar:"الامتحانات",  icon:"📖" },
+  { id:"assignments", en:"Assignments", ar:"الواجبات",    icon:"📌" },
+  { id:"chat",        en:"Chat",        ar:"المحادثة",    icon:"💬" },
+];
+
+/* ═══════════════════════════════════════════════════════════
+   QUIZ ATTEMPT SCREEN
+═══════════════════════════════════════════════════════════ */
+function QuizAttemptScreen({ quiz, attemptId, moodle, lang, isRtl, onFinish }) {
+  const [questions, setQuestions]   = useState([]);
+  const [answers,   setAnswers]     = useState({});
+  const [page,      setPage]        = useState(0);
+  const [loading,   setLoading]     = useState(true);
+  const [submitting,setSubmitting]  = useState(false);
+  const [totalPages,setTotalPages]  = useState(1);
+  const [timeLeft,  setTimeLeft]    = useState(quiz.timelimit || 0);
+  const timerRef = useRef(null);
+
+  useEffect(() => {
+    loadPage(0);
+    if (quiz.timelimit > 0) {
+      timerRef.current = setInterval(() => {
+        setTimeLeft(t => {
+          if (t <= 1) { clearInterval(timerRef.current); handleSubmit(true); return 0; }
+          return t - 1;
+        });
+      }, 1000);
+    }
+    return () => clearInterval(timerRef.current);
+  }, []);
+
+  async function loadPage(p) {
+    setLoading(true);
+    try {
+      const data = await moodle("mod_quiz_get_attempt_data", { attemptid: attemptId, page: p });
+      setQuestions(data.questions || []);
+      setTotalPages(data.nextpage === -1 ? p + 1 : (data.nextpage || p + 1));
+    } catch(e) { console.error(e); }
+    setLoading(false);
+  }
+
+  function handleAnswer(slot, name, value) {
+    setAnswers(prev => ({ ...prev, [`${slot}_${name}`]: value }));
+  }
+
+  async function handleSubmit(autoSubmit = false) {
+    if (!autoSubmit) {
+      if (!confirm(isRtl ? "هل أنت متأكد من إنهاء الاختبار؟" : "Are you sure you want to finish the quiz?")) return;
+    }
+    setSubmitting(true);
+    clearInterval(timerRef.current);
+    try {
+      // Build data array for process_attempt
+      const dataArr = [];
+      Object.entries(answers).forEach(([key, val]) => {
+        const [slot, ...nameParts] = key.split("_");
+        dataArr.push({ name: nameParts.join("_"), value: val });
+      });
+      dataArr.push({ name: "finishattempt", value: "1" });
+      dataArr.push({ name: "timeup", value: autoSubmit ? "1" : "0" });
+
+      await moodle("mod_quiz_process_attempt", {
+        attemptid: attemptId,
+        finishattempt: 1,
+        timeup: autoSubmit ? 1 : 0,
+        "data[0][name]": "finishattempt",
+        "data[0][value]": "1",
+      });
+
+      // Get review
+      const review = await moodle("mod_quiz_get_attempt_review", { attemptid: attemptId });
+      onFinish(review);
+    } catch(e) {
+      console.error(e);
+      // Even if process fails, try to get review
+      try {
+        const review = await moodle("mod_quiz_get_attempt_review", { attemptid: attemptId });
+        onFinish(review);
+      } catch {
+        onFinish(null);
+      }
+    }
+    setSubmitting(false);
+  }
+
+  function formatTime(s) {
+    const m = Math.floor(s / 60), sec = s % 60;
+    return `${String(m).padStart(2,"0")}:${String(sec).padStart(2,"0")}`;
+  }
+
+  const urgent = timeLeft > 0 && timeLeft < 60;
+
+  return (
+    <div style={{ maxWidth:760,margin:"0 auto" }}>
+      {/* Quiz header */}
+      <Card style={{ padding:"16px 20px",marginBottom:16,display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap" }}>
+        <div>
+          <div style={{ fontSize:16,fontWeight:800,color:"#0f172a" }}>{quiz.name}</div>
+          <div style={{ fontSize:12,color:"#64748b",marginTop:2 }}>
+            {isRtl?"السؤال":"Page"} {page+1} {isRtl?"من":"of"} {totalPages}
+          </div>
+        </div>
+        {quiz.timelimit > 0 && (
+          <div style={{ display:"flex",alignItems:"center",gap:8,padding:"8px 16px",borderRadius:12,background:urgent?"#fee2e2":"#f0f9ff",border:`1px solid ${urgent?"#fca5a5":"#bae6fd"}` }}>
+            <span style={{ fontSize:18 }}>{urgent?"⚠️":"⏱️"}</span>
+            <span style={{ fontSize:18,fontWeight:800,color:urgent?"#dc2626":"#0369a1",fontVariantNumeric:"tabular-nums" }}>
+              {formatTime(timeLeft)}
+            </span>
+          </div>
+        )}
+      </Card>
+
+      {/* Questions */}
+      {loading ? <Spinner/> : (
+        <div>
+          {questions.map((q, qi) => (
+            <Card key={q.slot} style={{ padding:"20px 24px",marginBottom:14,animation:"fadeUp 0.35s ease" }}>
+              {/* Question number badge */}
+              <div style={{ display:"flex",alignItems:"flex-start",gap:14,marginBottom:16 }}>
+                <div style={{ width:32,height:32,borderRadius:10,background:C.light,border:`1.5px solid ${C.blue}30`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:800,color:C.blue,flexShrink:0 }}>
+                  {q.number || qi+1}
+                </div>
+                {/* Question HTML from Moodle */}
+                <div style={{ flex:1,fontSize:14,color:"#0f172a",lineHeight:1.7 }}
+                  dangerouslySetInnerHTML={{ __html: q.html || `<p>${q.questionsummary || (isRtl?"السؤال غير متاح":"Question unavailable")}</p>` }}/>
+              </div>
+
+              {/* Answer area — rendered from Moodle HTML or fallback */}
+              {q.html ? (
+                <div style={{ paddingRight:isRtl?0:46,paddingLeft:isRtl?46:0 }}>
+                  {/* Render Moodle answer HTML — inputs need to be tracked */}
+                  <div
+                    dangerouslySetInnerHTML={{ __html: q.html }}
+                    style={{ fontSize:14 }}
+                    onChangeCapture={(e) => {
+                      const el = e.target;
+                      if (el.name) handleAnswer(q.slot, el.name, el.value);
+                    }}
+                  />
+                </div>
+              ) : (
+                /* Fallback: multiple choice from questionsummary */
+                <div style={{ paddingRight:isRtl?0:46,paddingLeft:isRtl?46:0 }}>
+                  <textarea
+                    placeholder={isRtl?"اكتب إجابتك هنا...":"Type your answer here..."}
+                    value={answers[`${q.slot}_answer`] || ""}
+                    onChange={e => handleAnswer(q.slot, "answer", e.target.value)}
+                    rows={3}
+                    style={{ width:"100%",padding:"10px 12px",border:"1.5px solid #e2e8f0",borderRadius:10,fontSize:13,outline:"none",resize:"vertical",fontFamily:"inherit",boxSizing:"border-box",transition:"border-color 0.2s" }}
+                    onFocus={e=>e.target.style.borderColor=C.blue}
+                    onBlur={e=>e.target.style.borderColor="#e2e8f0"}
+                  />
+                </div>
+              )}
+            </Card>
+          ))}
+
+          {/* Navigation */}
+          <div style={{ display:"flex",gap:10,justifyContent:"space-between",marginTop:8 }}>
+            <button
+              onClick={() => { setPage(p => p-1); loadPage(page-1); }}
+              disabled={page===0}
+              style={{ padding:"10px 20px",border:"1.5px solid #e2eaf5",borderRadius:11,background:"#fff",cursor:page===0?"not-allowed":"pointer",fontSize:13,fontWeight:600,color:"#374151",opacity:page===0?0.4:1,transition:"all 0.18s" }}>
+              {isRtl?"التالي →":"← Previous"}
+            </button>
+
+            {page < totalPages - 1 ? (
+              <button
+                onClick={() => { setPage(p => p+1); loadPage(page+1); }}
+                style={{ padding:"10px 24px",border:"none",borderRadius:11,background:`linear-gradient(135deg,${C.blue},${C.dark})`,cursor:"pointer",fontSize:13,fontWeight:700,color:"#fff",boxShadow:`0 4px 14px ${C.blue}40`,transition:"all 0.18s" }}
+                onMouseEnter={e=>e.currentTarget.style.transform="translateY(-1px)"}
+                onMouseLeave={e=>e.currentTarget.style.transform=""}>
+                {isRtl?"← السابق":"Next →"}
+              </button>
+            ) : (
+              <button
+                onClick={() => handleSubmit(false)}
+                disabled={submitting}
+                style={{ padding:"10px 28px",border:"none",borderRadius:11,background:submitting?"#94a3b8":"linear-gradient(135deg,#059669,#10b981)",cursor:submitting?"not-allowed":"pointer",fontSize:13,fontWeight:700,color:"#fff",boxShadow:"0 4px 14px rgba(5,150,105,0.35)",display:"flex",alignItems:"center",gap:8,transition:"all 0.18s" }}>
+                {submitting
+                  ? <><span style={{ width:14,height:14,border:"2px solid rgba(255,255,255,0.3)",borderTop:"2px solid #fff",borderRadius:"50%",animation:"spin 0.7s linear infinite",display:"inline-block" }}/>{isRtl?"جارٍ الإرسال...":"Submitting..."}</>
+                  : <>{isRtl?"✓ إنهاء الاختبار":"✓ Submit Quiz"}</>
+                }
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   QUIZ REVIEW SCREEN
+═══════════════════════════════════════════════════════════ */
+function QuizReviewScreen({ review, quiz, isRtl, onBack }) {
+  const attempt  = review?.attempt;
+  const grade    = review?.grade;
+  const maxGrade = quiz?.grade;
+
+  const pct = grade && maxGrade
+    ? Math.round((parseFloat(grade) / parseFloat(maxGrade)) * 100)
+    : null;
+
+  const passed  = pct != null && pct >= 50;
+  const gradeColor = pct == null ? "#64748b" : pct >= 85 ? "#059669" : pct >= 70 ? "#0284c7" : pct >= 50 ? "#d97706" : "#dc2626";
+  const gradeBg    = pct == null ? "#f8fafc" : pct >= 85 ? "#d1fae5" : pct >= 70 ? "#e0f2fe" : pct >= 50 ? "#fef3c7" : "#fee2e2";
+  const gradeLabel = pct == null ? "—" : pct >= 85 ? (isRtl?"ممتاز":"Excellent") : pct >= 70 ? (isRtl?"جيد جداً":"Very Good") : pct >= 50 ? (isRtl?"مقبول":"Pass") : (isRtl?"راسب":"Fail");
+
+  return (
+    <div style={{ maxWidth:640,margin:"0 auto",animation:"fadeUp 0.5s ease" }}>
+      <Card style={{ padding:"36px 32px",textAlign:"center",marginBottom:16 }}>
+        {/* Big result circle */}
+        <div style={{ width:110,height:110,borderRadius:"50%",background:gradeBg,border:`3px solid ${gradeColor}40`,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",margin:"0 auto 20px",boxShadow:`0 8px 32px ${gradeColor}20` }}>
+          <div style={{ fontSize:28,fontWeight:900,color:gradeColor,lineHeight:1 }}>{pct != null ? `${pct}%` : "—"}</div>
+          <div style={{ fontSize:11,color:gradeColor,fontWeight:600,marginTop:2 }}>{gradeLabel}</div>
+        </div>
+
+        <h2 style={{ fontSize:22,fontWeight:900,color:"#0f172a",margin:"0 0 6px" }}>
+          {passed ? (isRtl?"أحسنت! 🎉":"Well Done! 🎉") : (isRtl?"حاول مرة أخرى":"Try Again")}
+        </h2>
+        <p style={{ fontSize:13,color:"#64748b",margin:"0 0 24px" }}>{quiz?.name}</p>
+
+        {/* Score breakdown */}
+        <div style={{ display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,marginBottom:28 }}>
+          {[
+            { label:isRtl?"درجتك":"Your Score",   val:grade ? parseFloat(grade).toFixed(1) : "—",   c:"#1d6fd8" },
+            { label:isRtl?"من أصل":"Out of",       val:maxGrade ? parseFloat(maxGrade).toFixed(1):"—", c:"#475569" },
+            { label:isRtl?"الحالة":"Status",       val:gradeLabel,                                    c:gradeColor },
+          ].map((s,i)=>(
+            <div key={i} style={{ padding:"14px 8px",background:"#f8fafc",borderRadius:12,border:"1px solid #e2eaf5" }}>
+              <div style={{ fontSize:10,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:4 }}>{s.label}</div>
+              <div style={{ fontSize:18,fontWeight:800,color:s.c }}>{s.val}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Question review if available */}
+        {review?.questions?.length > 0 && (
+          <div style={{ textAlign:isRtl?"right":"left",marginBottom:20 }}>
+            <div style={{ fontSize:12,fontWeight:700,color:"#64748b",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:10 }}>
+              {isRtl?"مراجعة الأسئلة":"Question Review"}
+            </div>
+            {review.questions.map((q,i) => {
+              const correct = q.mark != null && q.maxmark != null && q.mark === q.maxmark;
+              const partial = q.mark > 0 && q.mark < q.maxmark;
+              return (
+                <div key={i} style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 14px",borderRadius:10,marginBottom:6,background:correct?"#f0fdf4":partial?"#fffbeb":"#fff5f5",border:`1px solid ${correct?"#bbf7d0":partial?"#fde68a":"#fecaca"}` }}>
+                  <span style={{ fontSize:16,flexShrink:0 }}>{correct?"✅":partial?"🟡":"❌"}</span>
+                  <div style={{ flex:1,minWidth:0 }}>
+                    <div style={{ fontSize:12,fontWeight:600,color:"#0f172a",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>
+                      {isRtl?"سؤال":"Q"}{q.number}: {q.questionsummary?.slice(0,60) || "—"}
+                    </div>
+                  </div>
+                  <div style={{ fontSize:12,fontWeight:700,color:correct?"#059669":partial?"#d97706":"#dc2626",flexShrink:0 }}>
+                    {q.mark != null ? q.mark.toFixed(1) : "—"}/{q.maxmark != null ? q.maxmark.toFixed(1) : "—"}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        <button onClick={onBack}
+          style={{ padding:"12px 32px",border:"none",borderRadius:12,background:`linear-gradient(135deg,${C.blue},${C.dark})`,color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",boxShadow:`0 4px 16px ${C.blue}35` }}>
+          {isRtl?"← العودة للاختبارات":"← Back to Quizzes"}
+        </button>
+      </Card>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   QUIZZES TAB
+═══════════════════════════════════════════════════════════ */
+function QuizzesTab({ course, user, moodle, lang, isRtl, tx }) {
+  const [quizzes,     setQuizzes]     = useState([]);
+  const [attempts,    setAttempts]    = useState({}); // quizId -> attempts[]
+  const [loading,     setLoading]     = useState(true);
+  const [activeQuiz,  setActiveQuiz]  = useState(null);  // quiz object
+  const [attemptId,   setAttemptId]   = useState(null);  // current attempt
+  const [review,      setReview]      = useState(null);  // finished review
+  const [starting,    setStarting]    = useState(null);  // quizId being started
+
+  useEffect(() => { loadQuizzes(); }, [course.id]);
+
+  async function loadQuizzes() {
+    setLoading(true);
+    try {
+      const data = await moodle("mod_quiz_get_quizzes_by_courses", { "courseids[0]": course.id });
+      const list = data?.quizzes || [];
+      setQuizzes(list);
+      // Load attempts for each quiz
+      const attMap = {};
+      await Promise.all(list.map(async q => {
+        try {
+          const a = await moodle("mod_quiz_get_user_attempts", { quizid: q.id, userid: user.userId, status: "all" });
+          attMap[q.id] = a?.attempts || [];
+        } catch { attMap[q.id] = []; }
+      }));
+      setAttempts(attMap);
+    } catch(e) { console.error(e); }
+    setLoading(false);
+  }
+
+  async function startQuiz(quiz) {
+    setStarting(quiz.id);
+    try {
+      // Check for an in-progress attempt first
+      const existing = attempts[quiz.id]?.find(a => a.state === "inprogress");
+      if (existing) {
+        setActiveQuiz(quiz);
+        setAttemptId(existing.id);
+        setReview(null);
+        setStarting(null);
+        return;
+      }
+      const data = await moodle("mod_quiz_start_attempt", { quizid: quiz.id });
+      if (data?.attempt?.id) {
+        setActiveQuiz(quiz);
+        setAttemptId(data.attempt.id);
+        setReview(null);
+      } else {
+        alert(data?.warnings?.[0]?.message || (isRtl ? "لا يمكن بدء الاختبار" : "Cannot start quiz"));
+      }
+    } catch(e) {
+      alert(e.message || (isRtl?"حدث خطأ":"Error starting quiz"));
+    }
+    setStarting(null);
+  }
+
+  async function viewReview(quiz, attemptId) {
+    setStarting(quiz.id);
+    try {
+      const r = await moodle("mod_quiz_get_attempt_review", { attemptid: attemptId });
+      setActiveQuiz(quiz);
+      setAttemptId(null);
+      setReview(r);
+    } catch(e) { alert(e.message); }
+    setStarting(null);
+  }
+
+  function onFinishAttempt(r) {
+    setAttemptId(null);
+    setReview(r);
+    loadQuizzes(); // refresh attempt counts
+  }
+
+  function onBackFromReview() {
+    setActiveQuiz(null);
+    setReview(null);
+    setAttemptId(null);
+  }
+
+  // ── ATTEMPT SCREEN ───────────────────────────────────
+  if (activeQuiz && attemptId) {
+    return (
+      <QuizAttemptScreen
+        quiz={activeQuiz}
+        attemptId={attemptId}
+        moodle={moodle}
+        lang={lang}
+        isRtl={isRtl}
+        onFinish={onFinishAttempt}
+      />
+    );
+  }
+
+  // ── REVIEW SCREEN ─────────────────────────────────────
+  if (activeQuiz && review) {
+    return (
+      <QuizReviewScreen
+        review={review}
+        quiz={activeQuiz}
+        isRtl={isRtl}
+        onBack={onBackFromReview}
+      />
+    );
+  }
+
+  // ── QUIZ LIST ─────────────────────────────────────────
+  if (loading) return <Spinner/>;
+
+  if (quizzes.length === 0) {
+    return (
+      <Card style={{ textAlign:"center",padding:"60px 24px",color:"#94a3b8" }}>
+        <div style={{ fontSize:48,marginBottom:12 }}>📝</div>
+        <div style={{ fontSize:15,fontWeight:600 }}>{isRtl?"لا توجد اختبارات في هذه المادة":"No quizzes in this course"}</div>
+      </Card>
+    );
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+
+  return (
+    <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
+      {quizzes.map((quiz, i) => {
+        const quizAttempts = attempts[quiz.id] || [];
+        const finished     = quizAttempts.filter(a => a.state === "finished");
+        const inProgress   = quizAttempts.find(a => a.state === "inprogress");
+        const attAllowed   = quiz.attempts || 0; // 0 = unlimited
+        const attUsed      = finished.length;
+        const attLeft      = attAllowed === 0 ? "∞" : Math.max(0, attAllowed - attUsed);
+        const noAttLeft    = attAllowed > 0 && attUsed >= attAllowed;
+        const notOpen      = quiz.timeopen && now < quiz.timeopen;
+        const closed       = quiz.timeclose && now > quiz.timeclose;
+        const canStart     = !noAttLeft && !notOpen && !closed;
+
+        // Best score
+        const bestAttempt  = finished.sort((a,b) => (b.sumgrades||0)-(a.sumgrades||0))[0];
+        const bestPct      = bestAttempt && quiz.grade
+          ? Math.round((bestAttempt.sumgrades / parseFloat(quiz.grade)) * 100) : null;
+
+        const statusColor  = closed ? "#dc2626" : notOpen ? "#d97706" : inProgress ? "#7c3aed" : "#059669";
+        const statusBg     = closed ? "#fee2e2" : notOpen ? "#fef3c7" : inProgress ? "#ede9fe" : "#d1fae5";
+        const statusLabel  = closed
+          ? (isRtl?"مغلق":"Closed")
+          : notOpen
+          ? (isRtl?"لم يُفتح بعد":"Not Open Yet")
+          : inProgress
+          ? (isRtl?"جارٍ...":"In Progress")
+          : (isRtl?"متاح":"Available");
+
+        return (
+          <Card key={quiz.id} style={{ padding:0,overflow:"hidden",animation:`fadeUp 0.4s ease ${i*0.06}s both` }}>
+            {/* Top color bar */}
+            <div style={{ height:4,background:`linear-gradient(to right,${C.blue},#38bdf8)` }}/>
+
+            <div style={{ padding:"18px 20px" }}>
+              <div style={{ display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:12,flexWrap:"wrap",marginBottom:14 }}>
+                <div style={{ flex:1,minWidth:0 }}>
+                  <div style={{ display:"flex",alignItems:"center",gap:8,marginBottom:4 }}>
+                    <div style={{ width:36,height:36,borderRadius:10,background:C.light,border:`1.5px solid ${C.blue}25`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0 }}>📝</div>
+                    <div>
+                      <div style={{ fontSize:15,fontWeight:800,color:"#0f172a",lineHeight:1.3 }}>{quiz.name}</div>
+                      {quiz.intro && (
+                        <div style={{ fontSize:12,color:"#64748b",marginTop:2 }}
+                          dangerouslySetInnerHTML={{ __html: quiz.intro.replace(/<[^>]*>/g,"").slice(0,100) }}/>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                {/* Status badge */}
+                <span style={{ background:statusBg,color:statusColor,border:`1px solid ${statusColor}30`,fontSize:11,fontWeight:700,padding:"4px 12px",borderRadius:20,whiteSpace:"nowrap",flexShrink:0 }}>
+                  {statusLabel}
+                </span>
+              </div>
+
+              {/* Info row */}
+              <div style={{ display:"flex",gap:16,flexWrap:"wrap",marginBottom:16 }}>
+                {[
+                  { icon:"🔄", label:isRtl?"المحاولات المسموحة":"Attempts Allowed", val:attAllowed===0?(isRtl?"غير محدود":"Unlimited"):attAllowed },
+                  { icon:"✅", label:isRtl?"المحاولات المستخدمة":"Used",            val:attUsed },
+                  { icon:"🎯", label:isRtl?"المحاولات المتبقية":"Remaining",        val:attLeft },
+                  ...(quiz.timelimit ? [{ icon:"⏱️", label:isRtl?"الوقت":"Time", val:`${Math.round(quiz.timelimit/60)} ${isRtl?"دقيقة":"min"}` }] : []),
+                  ...(quiz.grade     ? [{ icon:"💯", label:isRtl?"الدرجة الكلية":"Max Grade", val:quiz.grade }] : []),
+                ].map((info,j) => (
+                  <div key={j} style={{ display:"flex",alignItems:"center",gap:6,fontSize:12,color:"#64748b" }}>
+                    <span>{info.icon}</span>
+                    <span style={{ color:"#94a3b8" }}>{info.label}:</span>
+                    <span style={{ fontWeight:700,color:"#374151" }}>{info.val}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Date range */}
+              {(quiz.timeopen || quiz.timeclose) && (
+                <div style={{ display:"flex",gap:16,marginBottom:14,flexWrap:"wrap" }}>
+                  {quiz.timeopen > 0 && (
+                    <div style={{ fontSize:11,color:"#64748b",display:"flex",alignItems:"center",gap:4 }}>
+                      <span>📅</span>
+                      <span>{isRtl?"يفتح:":"Opens:"}</span>
+                      <span style={{ color:"#374151",fontWeight:600 }}>{new Date(quiz.timeopen*1000).toLocaleString(isRtl?"ar-EG":"en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</span>
+                    </div>
+                  )}
+                  {quiz.timeclose > 0 && (
+                    <div style={{ fontSize:11,color:"#64748b",display:"flex",alignItems:"center",gap:4 }}>
+                      <span>🔒</span>
+                      <span>{isRtl?"يغلق:":"Closes:"}</span>
+                      <span style={{ color:closed?"#dc2626":"#374151",fontWeight:600 }}>{new Date(quiz.timeclose*1000).toLocaleString(isRtl?"ar-EG":"en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Best score bar */}
+              {bestPct != null && (
+                <div style={{ marginBottom:14,padding:"10px 14px",background:"#f0f9ff",borderRadius:10,border:"1px solid #bae6fd" }}>
+                  <div style={{ display:"flex",justifyContent:"space-between",marginBottom:5 }}>
+                    <span style={{ fontSize:11,color:"#0369a1",fontWeight:600 }}>{isRtl?"أفضل درجة":"Best Score"}</span>
+                    <span style={{ fontSize:13,fontWeight:800,color:bestPct>=50?"#059669":"#dc2626" }}>{bestPct}%</span>
+                  </div>
+                  <div style={{ height:6,background:"#bae6fd",borderRadius:99,overflow:"hidden" }}>
+                    <div style={{ width:`${bestPct}%`,height:"100%",background:bestPct>=85?"#059669":bestPct>=50?"#0284c7":"#dc2626",borderRadius:99,transition:"width 1s ease" }}/>
+                  </div>
+                </div>
+              )}
+
+              {/* Action buttons */}
+              <div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>
+                {/* Start / Continue button */}
+                {inProgress ? (
+                  <button onClick={() => startQuiz(quiz)} disabled={starting === quiz.id}
+                    style={{ padding:"10px 22px",border:"none",borderRadius:11,background:"linear-gradient(135deg,#7c3aed,#6d28d9)",color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",gap:8,boxShadow:"0 4px 14px rgba(124,58,237,0.35)",transition:"all 0.2s" }}
+                    onMouseEnter={e=>e.currentTarget.style.transform="translateY(-1px)"}
+                    onMouseLeave={e=>e.currentTarget.style.transform=""}>
+                    {starting===quiz.id ? <><span style={{ width:13,height:13,border:"2px solid rgba(255,255,255,0.3)",borderTop:"2px solid #fff",borderRadius:"50%",animation:"spin 0.7s linear infinite",display:"inline-block" }}/>{isRtl?"جارٍ...":"Loading..."}</> : <>{isRtl?"▶ متابعة":"▶ Continue"}</>}
+                  </button>
+                ) : canStart ? (
+                  <button onClick={() => startQuiz(quiz)} disabled={starting === quiz.id}
+                    style={{ padding:"10px 22px",border:"none",borderRadius:11,background:`linear-gradient(135deg,${C.blue},${C.dark})`,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",gap:8,boxShadow:`0 4px 14px ${C.blue}35`,transition:"all 0.2s" }}
+                    onMouseEnter={e=>e.currentTarget.style.transform="translateY(-1px)"}
+                    onMouseLeave={e=>e.currentTarget.style.transform=""}>
+                    {starting===quiz.id ? <><span style={{ width:13,height:13,border:"2px solid rgba(255,255,255,0.3)",borderTop:"2px solid #fff",borderRadius:"50%",animation:"spin 0.7s linear infinite",display:"inline-block" }}/>{isRtl?"جارٍ...":"Starting..."}</> : <>{isRtl?"▶ ابدأ الاختبار":"▶ Start Quiz"}</>}
+                  </button>
+                ) : (
+                  <button disabled style={{ padding:"10px 22px",border:"1.5px solid #e2e8f0",borderRadius:11,background:"#f8fafc",color:"#94a3b8",fontSize:13,fontWeight:600,cursor:"not-allowed" }}>
+                    {noAttLeft ? (isRtl?"انتهت المحاولات":"No Attempts Left") : notOpen ? (isRtl?"لم يُفتح بعد":"Not Open Yet") : (isRtl?"مغلق":"Closed")}
+                  </button>
+                )}
+
+                {/* View last result */}
+                {finished.length > 0 && (
+                  <button onClick={() => viewReview(quiz, finished[finished.length-1].id)} disabled={starting===quiz.id}
+                    style={{ padding:"10px 20px",border:`1.5px solid ${C.blue}30`,borderRadius:11,background:C.light,color:C.blue,fontSize:13,fontWeight:600,cursor:"pointer",transition:"all 0.2s" }}
+                    onMouseEnter={e=>{e.currentTarget.style.background=C.blue;e.currentTarget.style.color="#fff";}}
+                    onMouseLeave={e=>{e.currentTarget.style.background=C.light;e.currentTarget.style.color=C.blue;}}>
+                    {isRtl?"📊 عرض النتيجة":"📊 View Result"}
+                  </button>
+                )}
+              </div>
+            </div>
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   COMING SOON TAB
+═══════════════════════════════════════════════════════════ */
+function ComingSoonTab({ icon, label, isRtl }) {
+  return (
+    <Card style={{ textAlign:"center",padding:"72px 24px",color:"#94a3b8" }}>
+      <div style={{ fontSize:56,marginBottom:16 }}>{icon}</div>
+      <div style={{ fontSize:18,fontWeight:800,color:"#0f172a",marginBottom:8 }}>{label}</div>
+      <div style={{ fontSize:13,color:"#94a3b8",maxWidth:320,margin:"0 auto",lineHeight:1.7 }}>
+        {isRtl?"هذا القسم قيد التطوير وسيكون متاحاً قريباً.":"This section is under development and will be available soon."}
+      </div>
+      <div style={{ display:"inline-flex",alignItems:"center",gap:6,marginTop:20,padding:"8px 18px",background:"#f0f9ff",border:"1px solid #bae6fd",borderRadius:20,fontSize:12,color:"#0369a1",fontWeight:600 }}>
+        🚧 {isRtl?"قريباً":"Coming Soon"}
+      </div>
+    </Card>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   MAIN COURSE DETAIL COMPONENT
+═══════════════════════════════════════════════════════════ */
+export default function CourseDetail({ course, user, lang, isRtl, tx, onBack, courseContent, loadingContent, moodle: moodleCall }) {
+  const [activeTab, setActiveTab] = useState("overview");
+
+  const color = ["#1d6fd8","#059669","#7c3aed","#d97706","#dc2626","#0891b2"][course.id % 6];
+
+  // Wrap moodle call to just pass fn + params
+  async function moodle(fn, params={}) {
+    return moodleCall(user?.token, fn, params);
+  }
+
+  const modIcon = (modname) => {
+    const map={resource:"📄",url:"🔗",page:"📃",folder:"📁",quiz:"📝",assign:"📋",forum:"💬",video:"🎬",label:"🏷️",scorm:"📦",book:"📖",glossary:"📚",workshop:"🛠️",survey:"📊",feedback:"✍️",choice:"🗳️",lesson:"📖",wiki:"📝",h5pactivity:"🎮"};
+    return map[modname]||"📎";
+  };
+
+  function fmtDate(ts) {
+    if (!ts) return "—";
+    return new Date(ts*1000).toLocaleDateString(isRtl?"ar-EG":"en-GB",{day:"numeric",month:"short",year:"numeric"});
+  }
+
+  return (
+    <div style={{ animation:"fadeUp 0.4s ease" }}>
+
+      {/* ── Course header ── */}
+      <div style={{ marginBottom:18 }}>
+        <button onClick={onBack}
+          style={{ padding:"7px 16px",border:"1.5px solid #e2eaf5",borderRadius:10,background:"#fff",cursor:"pointer",fontSize:13,fontWeight:600,color:"#374151",display:"inline-flex",alignItems:"center",gap:6,marginBottom:12,boxShadow:"0 1px 4px rgba(0,0,0,0.06)",transition:"all 0.15s" }}
+          onMouseEnter={e=>e.currentTarget.style.borderColor=C.blue}
+          onMouseLeave={e=>e.currentTarget.style.borderColor="#e2eaf5"}>
+          {isRtl?"→":"←"} {tx.back}
+        </button>
+
+        <Card style={{ padding:0,overflow:"hidden" }}>
+          <div style={{ height:6,background:`linear-gradient(to right,${color},${color}88)` }}/>
+          <div style={{ padding:"20px 24px",display:"flex",alignItems:"center",gap:16 }}>
+            <div style={{ width:52,height:52,borderRadius:14,background:color+"18",border:`1.5px solid ${color}30`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:24,flexShrink:0 }}>📚</div>
+            <div style={{ flex:1,minWidth:0 }}>
+              <h2 style={{ margin:0,fontSize:18,fontWeight:900,color:"#0f172a",letterSpacing:"-0.02em" }}>{course.fullname}</h2>
+              {course.shortname && <div style={{ fontSize:12,color:"#94a3b8",marginTop:2 }}>{course.shortname}</div>}
+            </div>
+          </div>
+        </Card>
+      </div>
+
+      {/* ── Tabs ── */}
+      <div style={{ display:"flex",gap:4,marginBottom:20,overflowX:"auto",paddingBottom:2 }}>
+        {TABS.map(tab => {
+          const active = activeTab === tab.id;
+          return (
+            <button key={tab.id} onClick={() => setActiveTab(tab.id)}
+              style={{ display:"flex",alignItems:"center",gap:7,padding:"9px 18px",border:"none",borderRadius:12,cursor:"pointer",fontSize:13,fontWeight:active?700:500,background:active?C.blue:"#fff",color:active?"#fff":"#475569",whiteSpace:"nowrap",flexShrink:0,transition:"all 0.18s",boxShadow:active?`0 4px 14px ${C.blue}35`:"0 1px 4px rgba(0,0,0,0.06)",border:active?"none":"1px solid #e2eaf5" }}
+              onMouseEnter={e=>{ if(!active){ e.currentTarget.style.background=C.light; e.currentTarget.style.color=C.blue; }}}
+              onMouseLeave={e=>{ if(!active){ e.currentTarget.style.background="#fff"; e.currentTarget.style.color="#475569"; }}}>
+              <span>{tab.icon}</span>
+              <span>{isRtl ? tab.ar : tab.en}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* ── Tab content ── */}
+
+      {/* OVERVIEW */}
+      {activeTab === "overview" && (
+        <div>
+          {loadingContent ? <Spinner/> : !courseContent ? (
+            <Card style={{ textAlign:"center",padding:40,color:"#94a3b8" }}>
+              <div style={{ fontSize:40,marginBottom:10 }}>📭</div>
+              <div>{tx.noCourseContent}</div>
+            </Card>
+          ) : (
+            <div>
+              {/* Stats row */}
+              {(()=>{
+                const sections = courseContent || [];
+                const allMods  = sections.flatMap(s=>s.modules||[]);
+                return (
+                  <div style={{ display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:16 }}>
+                    {[
+                      {icon:"📄",label:tx.materials, val:allMods.filter(m=>["resource","folder","url"].includes(m.modname)).length, c:"#0891b2"},
+                      {icon:"📝",label:tx.quizzes,   val:allMods.filter(m=>m.modname==="quiz").length,  c:"#7c3aed"},
+                      {icon:"📋",label:tx.assignments,val:allMods.filter(m=>m.modname==="assign").length,c:"#d97706"},
+                      {icon:"🗂️",label:tx.sections,  val:sections.filter(s=>s.modules?.length>0).length,c:color},
+                    ].map((s,i)=>(
+                      <Card key={i} style={{ padding:"14px",textAlign:"center" }}>
+                        <div style={{ fontSize:20,marginBottom:4 }}>{s.icon}</div>
+                        <div style={{ fontSize:22,fontWeight:900,color:s.c }}>{s.val}</div>
+                        <div style={{ fontSize:10,color:"#64748b" }}>{s.label}</div>
+                      </Card>
+                    ))}
+                  </div>
+                );
+              })()}
+
+              {/* Sections */}
+              {(courseContent||[]).filter(s=>s.modules?.length>0).map((section,si)=>(
+                <Card key={section.id} style={{ marginBottom:12,padding:0,overflow:"hidden" }}>
+                  <div style={{ padding:"11px 16px",background:"#f8fafc",borderBottom:"1px solid #f1f5f9",display:"flex",alignItems:"center",gap:10 }}>
+                    <div style={{ width:26,height:26,borderRadius:7,background:"#dbeafe",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,color:C.blue,fontWeight:700,flexShrink:0,border:"1px solid #bfdbfe" }}>{si+1}</div>
+                    <div style={{ fontWeight:700,fontSize:13,color:"#0f172a",flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{section.name||(isRtl?`الوحدة ${si+1}`:`Section ${si+1}`)}</div>
+                    <span style={{ fontSize:10,color:"#94a3b8",flexShrink:0 }}>{section.modules.length} {isRtl?"عنصر":"items"}</span>
+                  </div>
+                  {section.modules.map((mod,mi)=>{
+                    const isQuiz=mod.modname==="quiz", isAssign=mod.modname==="assign";
+                    const mc=isQuiz?"#7c3aed":isAssign?"#d97706":"#0891b2";
+                    return (
+                      <div key={mod.id} style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 16px",borderBottom:mi<section.modules.length-1?"1px solid #f8fafc":"none",transition:"background 0.15s" }}
+                        onMouseEnter={e=>e.currentTarget.style.background="#f8fafc"}
+                        onMouseLeave={e=>e.currentTarget.style.background=""}>
+                        <div style={{ width:30,height:30,borderRadius:8,background:mc+"12",display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,flexShrink:0,border:`1px solid ${mc}20` }}>{modIcon(mod.modname)}</div>
+                        <div style={{ flex:1,minWidth:0 }}>
+                          <div style={{ fontSize:13,fontWeight:600,color:"#0f172a",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{mod.name}</div>
+                          <div style={{ fontSize:10,color:"#94a3b8",marginTop:1 }}>
+                            <span style={{ textTransform:"capitalize" }}>{mod.modname}</span>
+                            {(isQuiz||isAssign)&&mod.dates?.find(d=>d.label==="Due")&&(
+                              <span> · {tx.dueDate}: {fmtDate(mod.dates.find(d=>d.label==="Due").timestamp)}</span>
+                            )}
+                          </div>
+                        </div>
+                        <span style={{ background:mc+"12",color:mc,fontSize:9,fontWeight:700,padding:"2px 8px",borderRadius:20,border:`1px solid ${mc}25`,flexShrink:0,textTransform:"capitalize" }}>{mod.modname}</span>
+                      </div>
+                    );
+                  })}
+                </Card>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* QUIZZES */}
+      {activeTab === "quizzes" && (
+        <QuizzesTab
+          course={course}
+          user={user}
+          moodle={moodle}
+          lang={lang}
+          isRtl={isRtl}
+          tx={tx}
+        />
+      )}
+
+      {/* EXAMS — coming soon */}
+      {activeTab === "exams" && (
+        <ComingSoonTab icon="📖" label={isRtl?"الامتحانات":"Exams"} isRtl={isRtl}/>
+      )}
+
+      {/* ASSIGNMENTS — coming soon */}
+      {activeTab === "assignments" && (
+        <ComingSoonTab icon="📌" label={isRtl?"الواجبات":"Assignments"} isRtl={isRtl}/>
+      )}
+
+      {/* CHAT — coming soon */}
+      {activeTab === "chat" && (
+        <ComingSoonTab icon="💬" label={isRtl?"المحادثة مع المعلم":"Chat with Teacher"} isRtl={isRtl}/>
+      )}
+
+      <style>{`
+        @keyframes spin    { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+        @keyframes fadeUp  { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:translateY(0)} }
+      `}</style>
+    </div>
+  );
+}
