@@ -1030,48 +1030,67 @@ function ChatTab({ course, user, moodle, lang, isRtl }) {
   const [error,        setError]        = useState("");
   const bottomRef = useRef(null);
 
-  useEffect(() => { loadTeacherAndHistory(); }, [course.id]);
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
+  useEffect(() => {
+  loadTeacherAndHistory();
+  }, [course.id]);
+
+  useEffect(() => {
+    if (!teacher) return;
+    const interval = setInterval(() => fetchMessages(teacher.id), 5000);
+    return () => clearInterval(interval);
+  }, [teacher]);
 
   async function loadTeacherAndHistory() {
-    setLoading(true);
-    setError("");
-    try {
-      // Fetch enrolled users — role 3 = editingteacher, role 4 = teacher
-      const enrolled = await moodle("core_enrol_get_enrolled_users", { courseid: course.id });
-      const found = (enrolled || []).find(u =>
-        u.roles?.some(r => r.roleid === 3 || r.roleid === 4)
-      );
-      if (!found) { setError(isRtl ? "لم يتم العثور على معلم لهذه المادة" : "No teacher found for this course"); setLoading(false); return; }
-      setTeacher(found);
+  setLoading(true);
+  setError("");
+  try {
+    const enrolled = await moodle("core_enrol_get_enrolled_users", { courseid: course.id });
+    const found = (enrolled || []).find(u =>
+      u.roles?.some(r => r.roleid === 3 || r.roleid === 4)
+    );
+    if (!found) {
+      setError(isRtl ? "لم يتم العثور على معلم لهذه المادة" : "No teacher found for this course");
+      setLoading(false);
+      return;
+    }
+    setTeacher(found);
+    await fetchMessages(found.id);
+  } catch(e) { setError(e.message); }
+  setLoading(false);
+}
 
-      // Fetch message history between student and teacher
-      try {
-        const hist = await moodle("core_message_get_messages", {
-          useridto:   user.userId,
-          useridfrom: found.id,
-          type:       "conversations",
-          read:       1,
-          limitnum:   50,
-        });
-        const received = (hist?.messages || []).map(m => ({ ...m, fromMe: false }));
+async function fetchMessages(teacherId) {
+  try {
+    const [readReceived, unreadReceived, sentMsgs] = await Promise.all([
+      moodle("core_message_get_messages", {
+        useridto: user.userId, useridfrom: teacherId,
+        type: "conversations", read: 1, limitnum: 50,
+      }).catch(() => ({ messages: [] })),
+      moodle("core_message_get_messages", {
+        useridto: user.userId, useridfrom: teacherId,
+        type: "conversations", read: 0, limitnum: 50,
+      }).catch(() => ({ messages: [] })),
+      moodle("core_message_get_messages", {
+        useridto: teacherId, useridfrom: user.userId,
+        type: "conversations", read: 1, limitnum: 50,
+      }).catch(() => ({ messages: [] })),
+    ]);
 
-        const hist2 = await moodle("core_message_get_messages", {
-          useridto:   found.id,
-          useridfrom: user.userId,
-          type:       "conversations",
-          read:       1,
-          limitnum:   50,
-        });
-        const sent = (hist2?.messages || []).map(m => ({ ...m, fromMe: true }));
+    const received = [
+      ...(readReceived?.messages   || []),
+      ...(unreadReceived?.messages || []),
+    ].map(m => ({ ...m, fromMe: false }));
 
-        const all = [...received, ...sent].sort((a, b) => a.timecreated - b.timecreated);
-        setMessages(all);
-      } catch { setMessages([]); }
+    const sent = (sentMsgs?.messages || []).map(m => ({ ...m, fromMe: true }));
 
-    } catch(e) { setError(e.message); }
-    setLoading(false);
-  }
+    const seen = new Set();
+    const all = [...received, ...sent]
+      .filter(m => { if (seen.has(m.id)) return false; seen.add(m.id); return true; })
+      .sort((a, b) => a.timecreated - b.timecreated);
+
+    setMessages(all);
+  } catch { }
+}
 
   async function sendMessage() {
     if (!input.trim() || !teacher) return;

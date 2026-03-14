@@ -23,6 +23,8 @@ const NO_CACHE = new Set([
   "core_user_delete_users",
   "mod_assign_save_grade",
   "mod_assign_save_submission",
+  "core_message_send_instant_messages",
+  "core_message_get_messages",
 ]);
 
 interface CacheEntry { data: any; expires: number; }
