@@ -278,7 +278,7 @@ export default function StudentDashboard({ user, onLogout, onUserUpdate, lang, s
 
   // ── Profile state ──────────────────────────────────────
   const [avatar,       setAvatar]       = useState(() => { try { return localStorage.getItem(`nbg_avatar_${user?.userId}`) || null; } catch{ return null; } });
-  const [profileForm,  setProfileForm]  = useState({ firstName:"", lastName:"", email:"", phone:"", bio:"" });
+  const [profileForm,  setProfileForm]  = useState({ firstName:"", lastName:"", email:"", bio:"" });
   const [pwForm,       setPwForm]       = useState({ current:"", newPw:"", confirm:"" });
   const [profileMsg,   setProfileMsg]   = useState(null); // {type:"success"|"error", text:""}
   const [pwMsg,        setPwMsg]        = useState(null);
@@ -309,17 +309,13 @@ export default function StudentDashboard({ user, onLogout, onUserUpdate, lang, s
     try {
       const data = await moodle(token, "core_user_get_users_by_field", { field:"id", "values[0]":userId });
       const u = data?.[0];
-      if (u) setProfileForm({ firstName:u.firstname||"", lastName:u.lastname||"", email:u.email||"", phone:u.phone1||"", bio:u.description||"" });
+      if (u) setProfileForm({ firstName:u.firstname||"", lastName:u.lastname||"", email:u.email||"", bio:u.description||"" });
     } catch {}
   }
 
   async function saveProfile() {
     setSavingProfile(true); setProfileMsg(null);
     // Validate phone before sending
-    if (profileForm.phone && profileForm.phone.length !== 11) {
-      setProfileMsg({ type:"error", text: lang==="ar" ? "رقم الهاتف يجب أن يكون 11 رقماً" : "Phone number must be exactly 11 digits" });
-      setSavingProfile(false); return;
-    }
     try {
       const res = await fetch("/api/moodle-admin", {
         method:"POST", headers:{"Content-Type":"application/json"},
@@ -330,7 +326,6 @@ export default function StudentDashboard({ user, onLogout, onUserUpdate, lang, s
             "users[0][firstname]":   profileForm.firstName,
             "users[0][lastname]":    profileForm.lastName,
             "users[0][email]":       profileForm.email,
-            "users[0][phone1]":      profileForm.phone,
             "users[0][description]": profileForm.bio,
           }
         }),
@@ -1219,40 +1214,6 @@ export default function StudentDashboard({ user, onLogout, onUserUpdate, lang, s
                     </div>
                   </div>
 
-                  {/* Phone — numbers only, max 11 digits */}
-                  <div style={{ marginBottom:12 }}>
-                    <label style={{ display:"block",fontSize:11,fontWeight:700,color:"#64748b",marginBottom:5,textTransform:"uppercase",letterSpacing:"0.04em" }}>
-                      {isRtl?"رقم الهاتف":"Phone Number"}
-                      <span style={{ marginRight:6,marginLeft:6,fontSize:10,color:profileForm.phone.length===11?"#059669":profileForm.phone.length>0?"#f59e0b":"#cbd5e1",fontWeight:600 }}>
-                        {profileForm.phone.length}/11
-                      </span>
-                    </label>
-                    <div style={{ position:"relative" }}>
-                      <span style={{ position:"absolute",top:"50%",transform:"translateY(-50%)",fontSize:14,[isRtl?"right":"left"]:10 }}>📱</span>
-                      <input
-                        value={profileForm.phone}
-                        onChange={e=>{
-                          // Strip anything that is not a digit
-                          const digitsOnly = e.target.value.replace(/\D/g,"");
-                          // Limit to 11 digits
-                          if (digitsOnly.length <= 11) {
-                            setProfileForm(p=>({...p, phone: digitsOnly}));
-                          }
-                        }}
-                        inputMode="numeric"
-                        pattern="[0-9]*"
-                        maxLength={11}
-                        placeholder="01XXXXXXXXX"
-                        style={{ width:"100%",padding:`9px 12px 9px ${isRtl?"12px":"34px"}`,border:`1.5px solid ${profileForm.phone.length>0&&profileForm.phone.length!==11?"#f59e0b":"#e2e8f0"}`,borderRadius:9,fontSize:13,outline:"none",background:"#f8fafc",direction:"ltr",boxSizing:"border-box",letterSpacing:"0.05em" }}
-                        onFocus={e=>e.target.style.borderColor=rc}
-                        onBlur={e=>e.target.style.borderColor=profileForm.phone.length>0&&profileForm.phone.length!==11?"#f59e0b":"#e2e8f0"}/>
-                    </div>
-                    {profileForm.phone.length>0&&profileForm.phone.length!==11&&(
-                      <div style={{ fontSize:10,color:"#f59e0b",marginTop:4,fontWeight:600 }}>
-                        {isRtl?"رقم الهاتف يجب أن يكون 11 رقماً":"Phone number must be exactly 11 digits"}
-                      </div>
-                    )}
-                  </div>
 
                   {/* Bio */}
                   <div style={{ marginBottom:16 }}>
