@@ -225,6 +225,7 @@ export default function StudentDashboard({ user, onLogout, onUserUpdate, lang, s
 
   const [page,         setPage]         = useState("dashboard");
   const [activeCourse, setActiveCourse] = useState(null);
+  const [pendingTab,   setPendingTab]   = useState(null);
   const [certCourse,   setCertCourse]   = useState(null);
   const [sidebarOpen,  setSidebarOpen]  = useState(false);
   const [pdfLoading,   setPdfLoading]   = useState(false);
@@ -252,7 +253,7 @@ export default function StudentDashboard({ user, onLogout, onUserUpdate, lang, s
   const [courseContent,  setCourseContent]  = useState({});
   const [grades,         setGrades]         = useState({});
   const [upcoming,       setUpcoming]       = useState([]);
-  const [loadingCourses, setLoadingCourses] = useState(true);
+  const [examQuizIds,    setExamQuizIds]    = useState(new Set());  const [loadingCourses, setLoadingCourses] = useState(true);
   const [loadingContent, setLoadingContent] = useState(false);
   const [loadingGrades,  setLoadingGrades]  = useState(false);
   const [loadingUpcoming,setLoadingUpcoming]= useState(false);
@@ -418,6 +419,18 @@ export default function StudentDashboard({ user, onLogout, onUserUpdate, lang, s
 
   async function openCourse(course) { setActiveCourse(course); setPage("course"); await loadCourseContent(course.id); }
   function navigate(id) { setPage(id); setActiveCourse(null); setSidebarOpen(false); }
+
+  async function openCourseTab(courseId, tab) {
+    // Try to find the course object from already-loaded courses
+    let course = courses.find(c => c.id === courseId);
+    // Fallback: courseId might be undefined (Moodle didn't return ev.course.id)
+    // in that case we can't navigate — do nothing silently
+    if (!course) return;
+    setActiveCourse(course);
+    setPage("course");
+    setPendingTab(tab);
+    await loadCourseContent(course.id);
+  }
 
   const gradeValues = Object.values(grades).map(g=>g.total).filter(v=>v!=null);
   const overallAvg  = gradeValues.length>0 ? Math.round(gradeValues.reduce((a,b)=>a+b,0)/gradeValues.length) : null;
@@ -717,15 +730,74 @@ export default function StudentDashboard({ user, onLogout, onUserUpdate, lang, s
                       <h3 style={{ margin:"0 0 14px",fontSize:14,fontWeight:700,color:"#0f172a" }}>{tx.upcomingQuizzes}</h3>
                       {loadingUpcoming?<Spinner/>:upcoming.length===0?(
                         <div style={{ textAlign:"center",color:"#94a3b8",fontSize:12,padding:"20px 0" }}>✅ {isRtl?"لا توجد مهام":"No upcoming tasks"}</div>
-                      ):upcoming.slice(0,6).map((ev,i)=>(
-                        <div key={i} style={{ display:"flex",gap:10,paddingBottom:10,marginBottom:10,borderBottom:i<5?"1px solid #f1f5f9":"none" }}>
-                          <span style={{ fontSize:16,flexShrink:0 }}>{ev.modulename==="quiz"?"📝":"📋"}</span>
-                          <div style={{ minWidth:0 }}>
-                            <p style={{ margin:"0 0 2px",fontSize:12,fontWeight:600,color:"#fff",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{ev.name}</p>
-                            <p style={{ margin:0,fontSize:10,color:"#94a3b8" }}>{ev.timesort?fmtDateTime(ev.timesort,isRtl):"—"}</p>
-                          </div>
-                        </div>
-                      ))}
+):upcoming.slice(0,6).map((ev,i)=>{
+  // Detect exam: quiz event that has both open+close+timelimit
+  // The calendar event carries timestart and timeduration — timeduration > 0 means timelimit set
+  // and quizzes with a window have timesort = timeclose
+  const isExam = ev.modulename==="quiz" && ev.timeduration > 0 && !!ev.timestart && !!ev.timesort && ev.timesort !== ev.timestart;
+  const isQuiz = ev.modulename==="quiz" && !isExam;
+  const now = Math.floor(Date.now()/1000);
+  const soonMins = ev.timesort ? Math.round((ev.timesort - now)/60) : null;
+  const isSoon = soonMins != null && soonMins >= 0 && soonMins <= 60;
+
+  return (
+    <div key={i}
+      onClick={() => {
+        const courseId = ev.course?.id ?? ev.courseid ?? null;
+        const matched  = courseId
+          ? courses.find(c => c.id === courseId)
+          : courses.find(c => c.fullname === ev.course?.fullname);
+        if (!matched) return;
+        const quizId = ev.instance ?? null;
+        const tab = ev.modulename !== "quiz"
+          ? "overview"
+          : ev.eventtype === "close"
+          ? "exams"
+          : "quizzes";
+
+        openCourseTab(matched.id, tab);
+      }}
+      style={{
+        display:"flex", gap:10, padding:"8px 10px", marginBottom:6,
+        borderRadius:10,
+        cursor: "pointer",
+        transition:"all 0.2s",
+        background: isExam
+        ? isSoon ? "#fef3c7" : "#fff7ed"
+        : "#f8fafc",
+      border: isExam
+        ? isSoon ? "1px solid #fcd34d" : "1px solid #fed7aa"
+        : "1px solid #f1f5f9",
+      transition:"all 0.2s",
+    }}>
+      <span style={{ fontSize:16, flexShrink:0 }}>
+        {isExam ? (isSoon ? "⚠️" : "📖") : isQuiz ? "📝" : "📋"}
+      </span>
+      <div style={{ minWidth:0, flex:1 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:5, marginBottom:2, flexWrap:"wrap" }}>
+          <p style={{ margin:0, fontSize:12, fontWeight:700, color:"#0f172a", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+            {ev.name}
+          </p>
+          {isExam && (
+            <span style={{
+              fontSize:9, fontWeight:800, padding:"1px 6px", borderRadius:20, flexShrink:0,
+              background: isSoon ? "#fcd34d" : "#fed7aa",
+              color: isSoon ? "#92400e" : "#9a3412",
+              border: `1px solid ${isSoon?"#f59e0b":"#fb923c"}`,
+            }}>
+              {isSoon
+                ? (isRtl ? `⚡ خلال ${soonMins} دقيقة` : `⚡ in ${soonMins}m`)
+                : (isRtl ? "امتحان" : "EXAM")}
+            </span>
+          )}
+        </div>
+        <p style={{ margin:0, fontSize:10, color: isExam ? "#d97706" : "#94a3b8", fontWeight: isExam ? 600 : 400 }}>
+          {ev.timesort ? fmtDateTime(ev.timesort, isRtl) : "—"}
+        </p>
+      </div>
+    </div>
+  );
+})}
                     </GlassCard>
                   </div>
                 </>
@@ -784,15 +856,18 @@ export default function StudentDashboard({ user, onLogout, onUserUpdate, lang, s
           {/* ══ COURSE DETAIL ══ */}
           {page==="course"&&activeCourse&&(
             <CourseDetail
-              course={activeCourse}
-              user={user}
-              lang={lang}
-              isRtl={isRtl}
-              tx={tx}
-              onBack={()=>{setPage("courses");setActiveCourse(null);}}
-              courseContent={courseContent[activeCourse.id]}
-              loadingContent={loadingContent}
-              moodle={moodle}
+            course={activeCourse}
+            user={user}
+            lang={lang}
+            isRtl={isRtl}
+            tx={tx}
+            onBack={()=>{setPage("courses");setActiveCourse(null);setPendingTab(null);}}
+            courseContent={courseContent[activeCourse.id]}
+            loadingContent={loadingContent}
+            moodle={moodle}
+            initialTab={pendingTab}
+            onTabConsumed={()=>setPendingTab(null)}
+            onExamIdsLoaded={(ids)=>setExamQuizIds(prev => new Set([...prev, ...ids]))}
             />
           )}
 

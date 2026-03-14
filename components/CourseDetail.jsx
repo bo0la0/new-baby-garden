@@ -331,8 +331,9 @@ function QuizzesTab({ course, user, moodle, lang, isRtl, tx }) {
     setLoading(true);
     try {
       const data = await moodle("mod_quiz_get_quizzes_by_courses", { "courseids[0]": course.id });
-      const list = data?.quizzes || [];
-      setQuizzes(list);
+      const list = (data?.quizzes || []).filter(
+        q => !(q.timeopen > 0 && q.timeclose > 0 && q.timelimit > 0)
+      );      setQuizzes(list);
       // Load attempts for each quiz
       const attMap = {};
       await Promise.all(list.map(async q => {
@@ -581,6 +582,293 @@ function QuizzesTab({ course, user, moodle, lang, isRtl, tx }) {
 }
 
 /* ═══════════════════════════════════════════════════════════
+   EXAMS TAB
+   Exam = quiz where timeopen > 0 AND timeclose > 0 AND timelimit > 0
+═══════════════════════════════════════════════════════════ */
+function ExamsTab({ course, user, moodle, lang, isRtl, tx, onExamIdsLoaded }) {
+
+  const [exams,      setExams]      = useState([]);
+  const [attempts,   setAttempts]   = useState({});
+  const [loading,    setLoading]    = useState(true);
+  const [now,        setNow]        = useState(Math.floor(Date.now() / 1000));
+  const [enrolled,   setEnrolled]   = useState({});  // local placeholder — no API call yet
+  const [starting,   setStarting]   = useState(null);
+  const [activeExam, setActiveExam] = useState(null);
+  const [attemptId,  setAttemptId]  = useState(null);
+  const [review,     setReview]     = useState(null);
+
+  // Live clock — ticks every second so phase + countdown stay accurate
+  useEffect(() => {
+    const id = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  useEffect(() => { loadExams(); }, [course.id]);
+
+  async function loadExams() {
+    setLoading(true);
+    try {
+      const data = await moodle("mod_quiz_get_quizzes_by_courses", { "courseids[0]": course.id });
+      const all  = data?.quizzes || [];
+      // ── Exam filter: all three timing fields must be set (> 0) ──
+      const examList = all.filter(q => q.timeopen > 0 && q.timeclose > 0 && q.timelimit > 0);
+      setExams(examList);
+      if (onExamIdsLoaded) onExamIdsLoaded(examList.map(q => q.id));
+      const attMap = {};
+      await Promise.all(examList.map(async q => {
+        try {
+          const a = await moodle("mod_quiz_get_user_attempts", { quizid: q.id, userid: user.userId, status: "all" });
+          attMap[q.id] = a?.attempts || [];
+        } catch { attMap[q.id] = []; }
+      }));
+      setAttempts(attMap);
+    } catch(e) { console.error(e); }
+    setLoading(false);
+  }
+
+  async function startExam(exam) {
+    setStarting(exam.id);
+    try {
+      const existing = (attempts[exam.id] || []).find(a => a.state === "inprogress");
+      if (existing) {
+        setActiveExam(exam); setAttemptId(existing.id); setReview(null);
+        setStarting(null); return;
+      }
+      const data = await moodle("mod_quiz_start_attempt", { quizid: exam.id });
+      if (data?.attempt?.id) {
+        setActiveExam(exam); setAttemptId(data.attempt.id); setReview(null);
+      } else {
+        alert(data?.warnings?.[0]?.message || (isRtl ? "لا يمكن بدء الامتحان" : "Cannot start exam"));
+      }
+    } catch(e) { alert(e.message || (isRtl ? "حدث خطأ" : "Error starting exam")); }
+    setStarting(null);
+  }
+
+  async function viewReview(exam, attId) {
+    setStarting(exam.id);
+    try {
+      const r = await moodle("mod_quiz_get_attempt_review", { attemptid: attId });
+      setActiveExam(exam); setAttemptId(null); setReview(r);
+    } catch(e) { alert(e.message); }
+    setStarting(null);
+  }
+
+  function onFinishAttempt(r) { setAttemptId(null); setReview(r); loadExams(); }
+  function onBackFromReview() { setActiveExam(null); setReview(null); setAttemptId(null); }
+
+  // Returns "locked" | "enrollable" | "active" | "closed"
+  function getPhase(exam) {
+    const ENROLL_WINDOW = 10 * 60; // 10 min in seconds
+    if (now > exam.timeclose)                       return "closed";
+    if (now >= exam.timeopen)                       return "active";
+    if (now >= exam.timeopen - ENROLL_WINDOW)       return "enrollable";
+    return "locked";
+  }
+
+  function formatCountdown(secs) {
+    if (secs <= 0) return "00:00:00";
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    const s = secs % 60;
+    const pad = n => String(n).padStart(2, "0");
+    return h > 0 ? `${pad(h)}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+  }
+
+  // ── Attempt / Review screens reuse QuizAttemptScreen & QuizReviewScreen ──
+  if (activeExam && attemptId) {
+    return <QuizAttemptScreen quiz={activeExam} attemptId={attemptId} moodle={moodle} lang={lang} isRtl={isRtl} onFinish={onFinishAttempt} />;
+  }
+  if (activeExam && review) {
+    return <QuizReviewScreen review={review} quiz={activeExam} isRtl={isRtl} onBack={onBackFromReview} />;
+  }
+
+  if (loading) return <Spinner />;
+
+  if (exams.length === 0) {
+    return (
+      <Card style={{ textAlign:"center", padding:"60px 24px", color:"#94a3b8" }}>
+        <div style={{ fontSize:48, marginBottom:12 }}>📖</div>
+        <div style={{ fontSize:15, fontWeight:600 }}>
+          {isRtl ? "لا توجد امتحانات في هذه المادة" : "No exams in this course"}
+        </div>
+      </Card>
+    );
+  }
+
+  // Phase-based visual config
+  const PHASE_STYLE = {
+    locked:     { color:"#475569", bg:"#f1f5f9", border:"#e2e8f0", bar:"linear-gradient(to right,#94a3b8,#cbd5e1)", icon:"🔒", label: isRtl?"الامتحان مغلق":"Exam Locked"        },
+    enrollable: { color:"#d97706", bg:"#fef3c7", border:"#fde68a", bar:"linear-gradient(to right,#d97706,#fbbf24)", icon:"📋", label: isRtl?"التسجيل متاح":"Enrollment Open"     },
+    active:     { color:"#059669", bg:"#d1fae5", border:"#a7f3d0", bar:"linear-gradient(to right,#059669,#34d399)", icon:"🟢", label: isRtl?"الامتحان جارٍ":"Exam Active"         },
+    closed:     { color:"#dc2626", bg:"#fee2e2", border:"#fecaca", bar:"linear-gradient(to right,#dc2626,#f87171)", icon:"🔴", label: isRtl?"انتهى الامتحان":"Exam Closed"         },
+  };
+
+  return (
+    <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+      {exams.map((exam, i) => {
+        const phase        = getPhase(exam);
+        const ps           = PHASE_STYLE[phase];
+        const examAttempts = attempts[exam.id] || [];
+        const finished     = examAttempts.filter(a => a.state === "finished");
+        const inProgress   = examAttempts.find(a => a.state === "inprogress");
+        const isEnrolled   = !!enrolled[exam.id];
+
+        const countdown =
+          phase === "locked"     ? exam.timeopen  - now :
+          phase === "enrollable" ? exam.timeopen  - now :
+          phase === "active"     ? exam.timeclose - now : 0;
+
+        const bestAttempt = [...finished].sort((a,b)=>(b.sumgrades||0)-(a.sumgrades||0))[0];
+        const bestPct     = bestAttempt && exam.grade
+          ? Math.round((bestAttempt.sumgrades / parseFloat(exam.grade)) * 100) : null;
+
+        const spinnerEl = (
+          <span style={{ width:13, height:13, border:"2px solid rgba(255,255,255,0.3)", borderTop:"2px solid #fff", borderRadius:"50%", animation:"spin 0.7s linear infinite", display:"inline-block" }}/>
+        );
+
+        return (
+          <Card key={exam.id} style={{ padding:0, overflow:"hidden", animation:`fadeUp 0.4s ease ${i*0.07}s both` }}>
+
+            {/* Phase colour bar */}
+            <div style={{ height:4, background:ps.bar }}/>
+
+            <div style={{ padding:"18px 20px" }}>
+
+              {/* ── Header row ── */}
+              <div style={{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", gap:12, flexWrap:"wrap", marginBottom:14 }}>
+                <div style={{ flex:1, minWidth:0, display:"flex", alignItems:"center", gap:10 }}>
+                  <div style={{ width:38, height:38, borderRadius:10, background:ps.bg, border:`1.5px solid ${ps.border}`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:18, flexShrink:0 }}>
+                    {ps.icon}
+                  </div>
+                  <div>
+                    <div style={{ fontSize:15, fontWeight:800, color:"#0f172a", lineHeight:1.3 }}>{exam.name}</div>
+                    {exam.intro && (
+                      <div style={{ fontSize:12, color:"#64748b", marginTop:2 }}
+                        dangerouslySetInnerHTML={{ __html: exam.intro.replace(/<[^>]*>/g,"").slice(0,100) }}/>
+                    )}
+                  </div>
+                </div>
+                <span style={{ background:ps.bg, color:ps.color, border:`1px solid ${ps.border}`, fontSize:11, fontWeight:700, padding:"4px 12px", borderRadius:20, whiteSpace:"nowrap", flexShrink:0 }}>
+                  {ps.label}
+                </span>
+              </div>
+
+              {/* ── Live countdown (locked / enrollable / active only) ── */}
+              {phase !== "closed" && (
+                <div style={{ marginBottom:14, padding:"12px 16px", borderRadius:12, background:ps.bg, border:`1px solid ${ps.border}`, display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, flexWrap:"wrap" }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                    <span style={{ fontSize:18 }}>{phase === "active" ? "⏳" : "⏰"}</span>
+                    <span style={{ fontSize:12, color:ps.color, fontWeight:600 }}>
+                      {phase === "active"
+                        ? (isRtl ? "ينتهي خلال" : "Ends in")
+                        : (isRtl ? "يبدأ خلال"  : "Starts in")}
+                    </span>
+                  </div>
+                  <div style={{ fontSize:22, fontWeight:900, color:ps.color, fontVariantNumeric:"tabular-nums", letterSpacing:"0.04em" }}>
+                    {formatCountdown(countdown)}
+                  </div>
+                </div>
+              )}
+
+              {/* ── Info chips ── */}
+              <div style={{ display:"flex", gap:16, flexWrap:"wrap", marginBottom:14 }}>
+                {[
+                  { icon:"📅", lbl:isRtl?"يفتح":"Opens",    val:new Date(exam.timeopen *1000).toLocaleString(isRtl?"ar-EG":"en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}) },
+                  { icon:"🔒", lbl:isRtl?"يغلق":"Closes",   val:new Date(exam.timeclose*1000).toLocaleString(isRtl?"ar-EG":"en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}) },
+                  { icon:"⏱️", lbl:isRtl?"المدة":"Duration", val:`${Math.round(exam.timelimit/60)} ${isRtl?"دقيقة":"min"}` },
+                  ...(exam.grade ? [{ icon:"💯", lbl:isRtl?"الدرجة الكاملة":"Max Grade", val:exam.grade }] : []),
+                ].map((info,j) => (
+                  <div key={j} style={{ display:"flex", alignItems:"center", gap:6, fontSize:12, color:"#64748b" }}>
+                    <span>{info.icon}</span>
+                    <span style={{ color:"#94a3b8" }}>{info.lbl}:</span>
+                    <span style={{ fontWeight:700, color:"#374151" }}>{info.val}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* ── Best score bar ── */}
+              {bestPct != null && (
+                <div style={{ marginBottom:14, padding:"10px 14px", background:"#f0f9ff", borderRadius:10, border:"1px solid #bae6fd" }}>
+                  <div style={{ display:"flex", justifyContent:"space-between", marginBottom:5 }}>
+                    <span style={{ fontSize:11, color:"#0369a1", fontWeight:600 }}>{isRtl?"درجتك":"Your Score"}</span>
+                    <span style={{ fontSize:13, fontWeight:800, color:bestPct>=50?"#059669":"#dc2626" }}>{bestPct}%</span>
+                  </div>
+                  <div style={{ height:6, background:"#bae6fd", borderRadius:99, overflow:"hidden" }}>
+                    <div style={{ width:`${bestPct}%`, height:"100%", borderRadius:99, transition:"width 1s ease",
+                      background:bestPct>=85?"#059669":bestPct>=50?"#0284c7":"#dc2626" }}/>
+                  </div>
+                </div>
+              )}
+
+              {/* ── Action button ── */}
+              <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"center" }}>
+
+                {/* LOCKED */}
+                {phase === "locked" && (
+                  <button disabled style={{ padding:"10px 22px", border:"1.5px solid #e2e8f0", borderRadius:11, background:"#f8fafc", color:"#94a3b8", fontSize:13, fontWeight:600, cursor:"not-allowed", display:"flex", alignItems:"center", gap:7 }}>
+                    🔒 {isRtl?"الامتحان مغلق":"Exam Locked"}
+                  </button>
+                )}
+
+                {/* ENROLLABLE — placeholder toggle, no API call yet */}
+                {phase === "enrollable" && (
+                  <button
+                    onClick={() => setEnrolled(prev => ({ ...prev, [exam.id]: !prev[exam.id] }))}
+                    style={{ padding:"10px 22px", border:"none", borderRadius:11, color:"#fff", fontSize:13, fontWeight:700, cursor:"pointer", display:"flex", alignItems:"center", gap:8, transition:"all 0.2s",
+                      background: isEnrolled ? "linear-gradient(135deg,#059669,#10b981)" : "linear-gradient(135deg,#d97706,#f59e0b)",
+                      boxShadow:  isEnrolled ? "0 4px 14px rgba(5,150,105,0.35)"         : "0 4px 14px rgba(217,119,6,0.35)" }}
+                    onMouseEnter={e=>e.currentTarget.style.transform="translateY(-1px)"}
+                    onMouseLeave={e=>e.currentTarget.style.transform=""}>
+                    {isEnrolled
+                      ? (isRtl ? "✓ تم التسجيل"          : "✓ Enrolled")
+                      : (isRtl ? "📋 التسجيل للامتحان"   : "📋 Enroll for Exam")}
+                  </button>
+                )}
+
+                {/* ACTIVE — start or continue */}
+                {phase === "active" && (
+                  <button onClick={() => startExam(exam)} disabled={starting === exam.id}
+                    style={{ padding:"10px 22px", border:"none", borderRadius:11, color:"#fff", fontSize:13, fontWeight:700, cursor:"pointer", display:"flex", alignItems:"center", gap:8, transition:"all 0.2s",
+                      background:   inProgress ? "linear-gradient(135deg,#7c3aed,#6d28d9)"    : "linear-gradient(135deg,#059669,#10b981)",
+                      boxShadow:    inProgress ? "0 4px 14px rgba(124,58,237,0.35)"           : "0 4px 14px rgba(5,150,105,0.35)" }}
+                    onMouseEnter={e=>e.currentTarget.style.transform="translateY(-1px)"}
+                    onMouseLeave={e=>e.currentTarget.style.transform=""}>
+                    {starting === exam.id
+                      ? <>{spinnerEl}{isRtl?"جارٍ...":"Loading..."}</>
+                      : inProgress
+                        ? (isRtl ? "▶ متابعة الامتحان" : "▶ Continue Exam")
+                        : (isRtl ? "▶ ابدأ الامتحان"   : "▶ Start Exam")}
+                  </button>
+                )}
+
+                {/* CLOSED + attempted → view full review */}
+                {phase === "closed" && finished.length > 0 && (
+                  <button onClick={() => viewReview(exam, finished[finished.length-1].id)} disabled={starting === exam.id}
+                    style={{ padding:"10px 22px", border:"none", borderRadius:11, background:`linear-gradient(135deg,${C.blue},${C.dark})`, color:"#fff", fontSize:13, fontWeight:700, cursor:"pointer", display:"flex", alignItems:"center", gap:8, boxShadow:`0 4px 14px ${C.blue}35`, transition:"all 0.2s" }}
+                    onMouseEnter={e=>e.currentTarget.style.transform="translateY(-1px)"}
+                    onMouseLeave={e=>e.currentTarget.style.transform=""}>
+                    {starting === exam.id
+                      ? <>{spinnerEl}{isRtl?"جارٍ...":"Loading..."}</>
+                      : (isRtl ? "📊 عرض النتيجة" : "📊 View Results")}
+                  </button>
+                )}
+
+                {/* CLOSED + not attempted */}
+                {phase === "closed" && finished.length === 0 && (
+                  <button disabled style={{ padding:"10px 22px", border:"1.5px solid #fecaca", borderRadius:11, background:"#fff5f5", color:"#dc2626", fontSize:13, fontWeight:600, cursor:"not-allowed" }}>
+                    {isRtl ? "لم تشارك في الامتحان" : "Not Attempted"}
+                  </button>
+                )}
+              </div>
+
+            </div>
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
+/* ═══════════════════════════════════════════════════════════
    COMING SOON TAB
 ═══════════════════════════════════════════════════════════ */
 function ComingSoonTab({ icon, label, isRtl }) {
@@ -601,8 +889,15 @@ function ComingSoonTab({ icon, label, isRtl }) {
 /* ═══════════════════════════════════════════════════════════
    MAIN COURSE DETAIL COMPONENT
 ═══════════════════════════════════════════════════════════ */
-export default function CourseDetail({ course, user, lang, isRtl, tx, onBack, courseContent, loadingContent, moodle: moodleCall }) {
-  const [activeTab, setActiveTab] = useState("overview");
+export default function CourseDetail({ course, user, lang, isRtl, tx, onBack, courseContent, loadingContent, moodle: moodleCall, initialTab, onTabConsumed, onExamIdsLoaded }) {
+  const [activeTab, setActiveTab] = useState(initialTab || "overview");
+
+  useEffect(() => {
+    if (initialTab) {
+      setActiveTab(initialTab);
+      if (onTabConsumed) onTabConsumed();
+    }
+  }, [initialTab]);
 
   const color = ["#1d6fd8","#059669","#7c3aed","#d97706","#dc2626","#0891b2"][course.id % 6];
 
@@ -745,7 +1040,15 @@ export default function CourseDetail({ course, user, lang, isRtl, tx, onBack, co
 
       {/* EXAMS — coming soon */}
       {activeTab === "exams" && (
-        <ComingSoonTab icon="📖" label={isRtl?"الامتحانات":"Exams"} isRtl={isRtl}/>
+        <ExamsTab
+          course={course}
+          user={user}
+          moodle={moodle}
+          lang={lang}
+          isRtl={isRtl}
+          tx={tx}
+          onExamIdsLoaded={onExamIdsLoaded}
+        />
       )}
 
       {/* ASSIGNMENTS — coming soon */}
