@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
+import CourseDetail from "./CourseDetail";
 import SchoolFooter, { SCHOOL as SCHOOL_INFO } from "./SchoolFooter";
 
 /* ═══════════════════════════════════════════════════════════
@@ -782,80 +783,20 @@ export default function StudentDashboard({ user, onLogout, onUserUpdate, lang, s
 
           {/* ══ COURSE DETAIL ══ */}
           {page==="course"&&activeCourse&&(
-            <div>
-              <div style={{ display:"flex",alignItems:"center",gap:10,marginBottom:16 }}>
-                <button onClick={()=>{setPage("courses");setActiveCourse(null);}} style={{ padding:"7px 14px",border:"1px solid rgba(255,255,255,0.12)",borderRadius:10,background:"rgba(255,255,255,0.06)",cursor:"pointer",fontSize:13,fontWeight:600,color:"#1e293b",display:"flex",alignItems:"center",gap:5 }}>
-                  ← {tx.back}
-                </button>
-                <div style={{ minWidth:0 }}>
-                  <h2 style={{ margin:0,fontSize:isMobile?14:17,fontWeight:800,color:"#fff",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{activeCourse.fullname}</h2>
-                  {activeCourse.shortname&&<div style={{ fontSize:11,color:"#94a3b8" }}>{activeCourse.shortname}</div>}
-                </div>
-              </div>
-              {loadingContent?<Spinner/>:!courseContent[activeCourse.id]?(
-                <GlassCard extra={{ textAlign:"center",padding:40,color:"#94a3b8" }}>
-                  <div style={{ fontSize:40,marginBottom:10 }}>📭</div>
-                  <div>{tx.noCourseContent}</div>
-                </GlassCard>
-              ):(
-                <div>
-                  {(()=>{
-                    const sections=courseContent[activeCourse.id]||[];
-                    const allMods=sections.flatMap(s=>s.modules||[]);
-                    const color=courseColor(activeCourse.id);
-                    return(
-                      <div style={{ display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:isMobile?8:12,marginBottom:16 }}>
-                        {[
-                          {icon:"📄",label:tx.materials, val:allMods.filter(m=>["resource","folder","url"].includes(m.modname)).length, c:"#38bdf8"},
-                          {icon:"📝",label:tx.quizzes,   val:allMods.filter(m=>m.modname==="quiz").length,  c:"#a78bfa"},
-                          {icon:"📋",label:tx.assignments,val:allMods.filter(m=>m.modname==="assign").length,c:"#fb923c"},
-                          {icon:"🗂️",label:tx.sections,  val:sections.filter(s=>s.modules?.length>0).length,c:color},
-                        ].map((s,i)=>(
-                          <GlassCard key={i} extra={{ padding:"14px",textAlign:"center" }}>
-                            <div style={{ fontSize:isMobile?16:20,marginBottom:4 }}>{s.icon}</div>
-                            <div style={{ fontSize:isMobile?18:22,fontWeight:900,color:s.c }}>{s.val}</div>
-                            <div style={{ fontSize:isMobile?9:11,color:"#64748b" }}>{s.label}</div>
-                          </GlassCard>
-                        ))}
-                      </div>
-                    );
-                  })()}
-                  {courseContent[activeCourse.id].filter(s=>s.modules?.length>0).map((section,si)=>(
-                    <GlassCard key={section.id} extra={{ marginBottom:12,padding:0,overflow:"hidden" }}>
-                      <div style={{ padding:"11px 16px",background:"#f8fafc",borderBottom:"1px solid #f1f5f9",display:"flex",alignItems:"center",gap:10 }}>
-                        <div style={{ width:24,height:24,borderRadius:6,background:"#dbeafe",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"#1d6fd8",fontWeight:700,flexShrink:0,border:"1px solid #bfdbfe" }}>{si+1}</div>
-                        <div style={{ fontWeight:700,fontSize:13,color:"#fff",flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{section.name||(isRtl?`الوحدة ${si+1}`:`Section ${si+1}`)}</div>
-                        <span style={{ fontSize:10,color:"#94a3b8",flexShrink:0 }}>{section.modules.length} {isRtl?"عنصر":"items"}</span>
-                      </div>
-                      {section.modules.map((mod,mi)=>{
-                        const isQuiz=mod.modname==="quiz", isAssign=mod.modname==="assign";
-                        const c=isQuiz?"#a78bfa":isAssign?"#fb923c":"#38bdf8";
-                        return(
-                          <div key={mod.id} style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 16px",borderBottom:mi<section.modules.length-1?"1px solid #f1f5f9":"none",transition:"background 0.15s" }}
-                            onMouseEnter={e=>e.currentTarget.style.background="#f8fafc"}
-                            onMouseLeave={e=>e.currentTarget.style.background=""}>
-                            <div style={{ width:28,height:28,borderRadius:8,background:c+"18",display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,flexShrink:0,border:`1px solid ${c}25` }}>{modIcon(mod.modname)}</div>
-                            <div style={{ flex:1,minWidth:0 }}>
-                              <div style={{ fontSize:13,fontWeight:600,color:"#1e293b",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{mod.name}</div>
-                              <div style={{ fontSize:10,color:"#94a3b8",marginTop:1 }}>
-                                <span style={{ textTransform:"capitalize" }}>{mod.modname}</span>
-                                {(isQuiz||isAssign)&&mod.dates?.find(d=>d.label==="Due")&&(
-                                  <span> · {tx.dueDate}: {fmtDate(mod.dates.find(d=>d.label==="Due").timestamp,isRtl)}</span>
-                                )}
-                              </div>
-                            </div>
-                            <span style={{ background:c+"18",color:c,fontSize:9,fontWeight:700,padding:"2px 8px",borderRadius:20,border:`1px solid ${c}30`,flexShrink:0,textTransform:"capitalize" }}>{mod.modname}</span>
-                          </div>
-                        );
-                      })}
-                    </GlassCard>
-                  ))}
-                </div>
-              )}
-            </div>
+            <CourseDetail
+              course={activeCourse}
+              user={user}
+              lang={lang}
+              isRtl={isRtl}
+              tx={tx}
+              onBack={()=>{setPage("courses");setActiveCourse(null);}}
+              courseContent={courseContent[activeCourse.id]}
+              loadingContent={loadingContent}
+              moodle={moodle}
+            />
           )}
 
-          {/* ══ GRADES ══ */}
+          {/* ══ GRADES{/* ══ GRADES ══ */}
           {page==="grades"&&(
             <div>
               <div style={{ marginBottom:16 }}>
