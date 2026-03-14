@@ -869,6 +869,343 @@ function ExamsTab({ course, user, moodle, lang, isRtl, tx, onExamIdsLoaded }) {
   );
 }
 /* ═══════════════════════════════════════════════════════════
+   ASSIGNMENTS TAB
+═══════════════════════════════════════════════════════════ */
+function AssignmentsTab({ course, user, moodle, lang, isRtl }) {
+  const [assignments, setAssignments] = useState([]);
+  const [loading,     setLoading]     = useState(true);
+
+  useEffect(() => { loadAssignments(); }, [course.id]);
+
+  async function loadAssignments() {
+    setLoading(true);
+    try {
+      const data = await moodle("mod_assign_get_assignments", { "courseids[0]": course.id });
+      const list = data?.courses?.[0]?.assignments || [];
+      // For each assignment fetch the user's submission status
+      const withStatus = await Promise.all(list.map(async a => {
+        try {
+          const s = await moodle("mod_assign_get_submission_status", { assignid: a.id });
+          return { ...a, submissionStatus: s };
+        } catch { return { ...a, submissionStatus: null }; }
+      }));
+      setAssignments(withStatus);
+    } catch(e) { console.error(e); }
+    setLoading(false);
+  }
+
+  function getStatus(a) {
+    const sub = a.submissionStatus;
+    const lastSub = sub?.lastattempt?.submission;
+    const duedate = a.duedate;
+    const now = Math.floor(Date.now() / 1000);
+
+    if (!lastSub || lastSub.status === "new") {
+      if (duedate > 0 && now > duedate) {
+        return { label: isRtl ? "متأخر" : "Late", color: "#dc2626", bg: "#fee2e2", border: "#fecaca", icon: "⚠️" };
+      }
+      return { label: isRtl ? "معلق" : "Pending", color: "#d97706", bg: "#fef3c7", border: "#fde68a", icon: "📋" };
+    }
+    if (lastSub.status === "submitted") {
+      return { label: isRtl ? "تم التسليم" : "Submitted", color: "#059669", bg: "#d1fae5", border: "#a7f3d0", icon: "✅" };
+    }
+    return { label: isRtl ? "مسودة" : "Draft", color: "#0284c7", bg: "#e0f2fe", border: "#7dd3fc", icon: "📝" };
+  }
+
+  function fmtDue(ts) {
+    if (!ts || ts === 0) return isRtl ? "بدون موعد" : "No due date";
+    const now = Math.floor(Date.now() / 1000);
+    const diff = ts - now;
+    const date = new Date(ts * 1000).toLocaleString(isRtl ? "ar-EG" : "en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+    if (diff < 0) return `${date} ⚠️`;
+    if (diff < 86400) {
+      const h = Math.floor(diff / 3600);
+      return isRtl ? `خلال ${h} ساعة — ${date}` : `In ${h}h — ${date}`;
+    }
+    const d = Math.floor(diff / 86400);
+    return isRtl ? `خلال ${d} يوم — ${date}` : `In ${d}d — ${date}`;
+  }
+
+  if (loading) return <Spinner />;
+
+  if (assignments.length === 0) {
+    return (
+      <Card style={{ textAlign: "center", padding: "60px 24px", color: "#94a3b8" }}>
+        <div style={{ fontSize: 48, marginBottom: 12 }}>📌</div>
+        <div style={{ fontSize: 15, fontWeight: 600 }}>
+          {isRtl ? "لا توجد واجبات في هذه المادة" : "No assignments in this course"}
+        </div>
+      </Card>
+    );
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      {assignments.map((a, i) => {
+        const st = getStatus(a);
+        const intro = (a.intro || "").replace(/<[^>]*>/g, "").trim().slice(0, 160);
+        const isOverdue = a.duedate > 0 && Math.floor(Date.now() / 1000) > a.duedate && st.label !== (isRtl ? "تم التسليم" : "Submitted");
+
+        return (
+          <Card key={a.id} style={{ padding: 0, overflow: "hidden", animation: `fadeUp 0.4s ease ${i * 0.06}s both` }}>
+            <div style={{ height: 4, background: `linear-gradient(to right,${st.color},${st.color}66)` }} />
+            <div style={{ padding: "18px 20px" }}>
+
+              {/* Header */}
+              <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 0 }}>
+                  <div style={{ width: 38, height: 38, borderRadius: 10, background: st.bg, border: `1.5px solid ${st.border}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, flexShrink: 0 }}>
+                    {st.icon}
+                  </div>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 15, fontWeight: 800, color: "#0f172a", lineHeight: 1.3 }}>{a.name}</div>
+                    {intro && <div style={{ fontSize: 12, color: "#64748b", marginTop: 3, lineHeight: 1.5 }}>{intro}</div>}
+                  </div>
+                </div>
+                <span style={{ background: st.bg, color: st.color, border: `1px solid ${st.border}`, fontSize: 11, fontWeight: 700, padding: "4px 12px", borderRadius: 20, whiteSpace: "nowrap", flexShrink: 0 }}>
+                  {st.label}
+                </span>
+              </div>
+
+              {/* Due date */}
+              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 14px", borderRadius: 10, background: isOverdue ? "#fff5f5" : "#f8fafc", border: `1px solid ${isOverdue ? "#fecaca" : "#e2eaf5"}`, marginBottom: 12 }}>
+                <span style={{ fontSize: 16 }}>{isOverdue ? "🔴" : "📅"}</span>
+                <div>
+                  <div style={{ fontSize: 10, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                    {isRtl ? "موعد التسليم" : "Due Date"}
+                  </div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: isOverdue ? "#dc2626" : "#0f172a" }}>
+                    {fmtDue(a.duedate)}
+                  </div>
+                </div>
+              </div>
+
+              {/* Extra info chips */}
+              <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+                {a.grade > 0 && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, color: "#64748b" }}>
+                    <span>💯</span>
+                    <span style={{ color: "#94a3b8" }}>{isRtl ? "الدرجة الكاملة:" : "Max Grade:"}</span>
+                    <span style={{ fontWeight: 700, color: "#374151" }}>{a.grade}</span>
+                  </div>
+                )}
+                {a.submissionStatus?.lastattempt?.submission?.timemodified > 0 && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, color: "#64748b" }}>
+                    <span>🕐</span>
+                    <span style={{ color: "#94a3b8" }}>{isRtl ? "وقت التسليم:" : "Submitted at:"}</span>
+                    <span style={{ fontWeight: 700, color: "#059669" }}>
+                      {new Date(a.submissionStatus.lastattempt.submission.timemodified * 1000)
+                        .toLocaleString(isRtl ? "ar-EG" : "en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+                    </span>
+                  </div>
+                )}
+                {a.submissionStatus?.lastattempt?.gradingstatus && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, color: "#64748b" }}>
+                    <span>📊</span>
+                    <span style={{ color: "#94a3b8" }}>{isRtl ? "حالة التصحيح:" : "Grading:"}</span>
+                    <span style={{ fontWeight: 700, color: "#374151", textTransform: "capitalize" }}>
+                      {a.submissionStatus.lastattempt.gradingstatus}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+            </div>
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   CHAT TAB
+═══════════════════════════════════════════════════════════ */
+function ChatTab({ course, user, moodle, lang, isRtl }) {
+  const [teacher,      setTeacher]      = useState(null);
+  const [messages,     setMessages]     = useState([]);
+  const [input,        setInput]        = useState("");
+  const [loading,      setLoading]      = useState(true);
+  const [sending,      setSending]      = useState(false);
+  const [error,        setError]        = useState("");
+  const bottomRef = useRef(null);
+
+  useEffect(() => { loadTeacherAndHistory(); }, [course.id]);
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
+
+  async function loadTeacherAndHistory() {
+    setLoading(true);
+    setError("");
+    try {
+      // Fetch enrolled users — role 3 = editingteacher, role 4 = teacher
+      const enrolled = await moodle("core_enrol_get_enrolled_users", { courseid: course.id });
+      const found = (enrolled || []).find(u =>
+        u.roles?.some(r => r.roleid === 3 || r.roleid === 4)
+      );
+      if (!found) { setError(isRtl ? "لم يتم العثور على معلم لهذه المادة" : "No teacher found for this course"); setLoading(false); return; }
+      setTeacher(found);
+
+      // Fetch message history between student and teacher
+      try {
+        const hist = await moodle("core_message_get_messages", {
+          useridto:   user.userId,
+          useridfrom: found.id,
+          type:       "conversations",
+          read:       1,
+          limitnum:   50,
+        });
+        const received = (hist?.messages || []).map(m => ({ ...m, fromMe: false }));
+
+        const hist2 = await moodle("core_message_get_messages", {
+          useridto:   found.id,
+          useridfrom: user.userId,
+          type:       "conversations",
+          read:       1,
+          limitnum:   50,
+        });
+        const sent = (hist2?.messages || []).map(m => ({ ...m, fromMe: true }));
+
+        const all = [...received, ...sent].sort((a, b) => a.timecreated - b.timecreated);
+        setMessages(all);
+      } catch { setMessages([]); }
+
+    } catch(e) { setError(e.message); }
+    setLoading(false);
+  }
+
+  async function sendMessage() {
+    if (!input.trim() || !teacher) return;
+    setSending(true);
+    const text = input.trim();
+    setInput("");
+    // Optimistic UI — add message immediately
+    const optimistic = { id: Date.now(), text, smallmessage: text, timecreated: Math.floor(Date.now() / 1000), fromMe: true, pending: true };
+    setMessages(prev => [...prev, optimistic]);
+    try {
+      await moodle("core_message_send_instant_messages", {
+        "messages[0][touserid]": teacher.id,
+        "messages[0][text]":     text,
+        "messages[0][textformat]": 0,
+      });
+      // Mark as sent
+      setMessages(prev => prev.map(m => m.id === optimistic.id ? { ...m, pending: false } : m));
+    } catch(e) {
+      // Remove optimistic message and show error
+      setMessages(prev => prev.filter(m => m.id !== optimistic.id));
+      setError(isRtl ? "فشل إرسال الرسالة: " + e.message : "Failed to send: " + e.message);
+    }
+    setSending(false);
+  }
+
+  function fmtTime(ts) {
+    return new Date(ts * 1000).toLocaleString(isRtl ? "ar-EG" : "en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  }
+
+  if (loading) return <Spinner />;
+
+  if (error && !teacher) {
+    return (
+      <Card style={{ textAlign: "center", padding: "60px 24px", color: "#94a3b8" }}>
+        <div style={{ fontSize: 48, marginBottom: 12 }}>💬</div>
+        <div style={{ fontSize: 15, fontWeight: 600, color: "#dc2626" }}>{error}</div>
+      </Card>
+    );
+  }
+
+  return (
+    <Card style={{ padding: 0, overflow: "hidden", display: "flex", flexDirection: "column", height: 600 }}>
+
+      {/* ── Teacher header ── */}
+      <div style={{ padding: "14px 18px", borderBottom: "1px solid #e2eaf5", display: "flex", alignItems: "center", gap: 12, background: "#f8fafc", flexShrink: 0 }}>
+        <div style={{ width: 42, height: 42, borderRadius: "50%", background: `linear-gradient(135deg,${C.blue},${C.dark})`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, color: "#fff", fontWeight: 800, flexShrink: 0, border: `2px solid ${C.blue}30` }}>
+          {teacher?.profileimageurl
+            ? <img src={teacher.profileimageurl} alt="teacher" style={{ width: "100%", height: "100%", borderRadius: "50%", objectFit: "cover" }} />
+            : (teacher?.fullname || "T").charAt(0).toUpperCase()}
+        </div>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 800, color: "#0f172a" }}>{teacher?.fullname}</div>
+          <div style={{ fontSize: 11, color: "#64748b" }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+              <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#059669", display: "inline-block" }} />
+              {isRtl ? "معلم المادة" : "Course Teacher"}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Messages ── */}
+      <div style={{ flex: 1, overflowY: "auto", padding: "16px 18px", display: "flex", flexDirection: "column", gap: 10, background: "#f8fafc" }}>
+        {messages.length === 0 && (
+          <div style={{ textAlign: "center", color: "#94a3b8", fontSize: 13, margin: "auto" }}>
+            <div style={{ fontSize: 40, marginBottom: 10 }}>💬</div>
+            <div>{isRtl ? "لا توجد رسائل بعد. ابدأ المحادثة!" : "No messages yet. Start the conversation!"}</div>
+          </div>
+        )}
+        {messages.map((m, i) => {
+          const fromMe = m.fromMe;
+          const text = m.text || m.smallmessage || m.fullmessage || "";
+          const clean = text.replace(/<[^>]*>/g, "");
+          return (
+            <div key={m.id || i} style={{ display: "flex", justifyContent: fromMe ? (isRtl ? "flex-start" : "flex-end") : (isRtl ? "flex-end" : "flex-start") }}>
+              <div style={{ maxWidth: "72%", display: "flex", flexDirection: "column", gap: 3, alignItems: fromMe ? (isRtl ? "flex-start" : "flex-end") : (isRtl ? "flex-end" : "flex-start") }}>
+                <div style={{
+                  padding: "10px 14px", borderRadius: fromMe ? "16px 16px 4px 16px" : "16px 16px 16px 4px",
+                  background: fromMe ? `linear-gradient(135deg,${C.blue},${C.dark})` : "#fff",
+                  color: fromMe ? "#fff" : "#0f172a",
+                  fontSize: 13, lineHeight: 1.6,
+                  border: fromMe ? "none" : "1px solid #e2eaf5",
+                  boxShadow: fromMe ? `0 4px 14px ${C.blue}30` : "0 1px 4px rgba(0,0,0,0.06)",
+                  opacity: m.pending ? 0.65 : 1,
+                  transition: "opacity 0.3s",
+                }}>
+                  {clean}
+                </div>
+                <div style={{ fontSize: 10, color: "#94a3b8", paddingLeft: 4, paddingRight: 4 }}>
+                  {m.pending ? (isRtl ? "جارٍ الإرسال..." : "Sending...") : fmtTime(m.timecreated)}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+        <div ref={bottomRef} />
+      </div>
+
+      {/* ── Error banner ── */}
+      {error && (
+        <div style={{ padding: "8px 18px", background: "#fee2e2", color: "#dc2626", fontSize: 12, fontWeight: 600, borderTop: "1px solid #fecaca", flexShrink: 0 }}>
+          ⚠️ {error}
+          <button onClick={() => setError("")} style={{ marginLeft: 8, background: "none", border: "none", color: "#dc2626", cursor: "pointer", fontWeight: 800 }}>✕</button>
+        </div>
+      )}
+
+      {/* ── Input ── */}
+      <div style={{ padding: "12px 16px", borderTop: "1px solid #e2eaf5", display: "flex", gap: 10, alignItems: "flex-end", background: "#fff", flexShrink: 0 }}>
+        <textarea
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
+          placeholder={isRtl ? "اكتب رسالتك..." : "Type a message..."}
+          rows={1}
+          style={{ flex: 1, padding: "10px 14px", border: "1.5px solid #e2eaf5", borderRadius: 12, fontSize: 13, outline: "none", resize: "none", fontFamily: "inherit", lineHeight: 1.5, background: "#f8fafc", color: "#0f172a", transition: "border-color 0.2s", direction: isRtl ? "rtl" : "ltr", maxHeight: 100, overflowY: "auto" }}
+          onFocus={e => e.target.style.borderColor = C.blue}
+          onBlur={e => e.target.style.borderColor = "#e2eaf5"}
+        />
+        <button
+          onClick={sendMessage}
+          disabled={sending || !input.trim()}
+          style={{ width: 42, height: 42, borderRadius: 12, border: "none", background: sending || !input.trim() ? "#e2eaf5" : `linear-gradient(135deg,${C.blue},${C.dark})`, color: sending || !input.trim() ? "#94a3b8" : "#fff", cursor: sending || !input.trim() ? "not-allowed" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, flexShrink: 0, transition: "all 0.2s", boxShadow: sending || !input.trim() ? "none" : `0 4px 14px ${C.blue}35` }}
+          onMouseEnter={e => { if (!sending && input.trim()) e.currentTarget.style.transform = "scale(1.05)"; }}
+          onMouseLeave={e => e.currentTarget.style.transform = ""}>
+          {sending
+            ? <span style={{ width: 14, height: 14, border: "2px solid #94a3b8", borderTop: "2px solid #fff", borderRadius: "50%", animation: "spin 0.7s linear infinite", display: "inline-block" }} />
+            : <span style={{ transform: isRtl ? "scaleX(-1)" : "none", display: "inline-block" }}>➤</span>}
+        </button>
+      </div>
+
+    </Card>
+  );
+}
+/* ═══════════════════════════════════════════════════════════
    COMING SOON TAB
 ═══════════════════════════════════════════════════════════ */
 function ComingSoonTab({ icon, label, isRtl }) {
@@ -1051,14 +1388,26 @@ export default function CourseDetail({ course, user, lang, isRtl, tx, onBack, co
         />
       )}
 
-      {/* ASSIGNMENTS — coming soon */}
+      {/* ASSIGNMENTS */}
       {activeTab === "assignments" && (
-        <ComingSoonTab icon="📌" label={isRtl?"الواجبات":"Assignments"} isRtl={isRtl}/>
+        <AssignmentsTab
+          course={course}
+          user={user}
+          moodle={moodle}
+          lang={lang}
+          isRtl={isRtl}
+        />
       )}
 
-      {/* CHAT — coming soon */}
+      {/* CHAT */}
       {activeTab === "chat" && (
-        <ComingSoonTab icon="💬" label={isRtl?"المحادثة مع المعلم":"Chat with Teacher"} isRtl={isRtl}/>
+        <ChatTab
+          course={course}
+          user={user}
+          moodle={moodle}
+          lang={lang}
+          isRtl={isRtl}
+        />
       )}
 
       <style>{`
